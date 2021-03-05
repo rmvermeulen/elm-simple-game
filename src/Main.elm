@@ -1,20 +1,50 @@
 module Main exposing (..)
 
 import Browser
-import Html exposing (Html, text, div, h1, img)
-import Html.Attributes exposing (src)
+import Canvas exposing (..)
+import Canvas.Settings exposing (..)
+import Color
+import Html exposing (Html)
+import Html.Attributes exposing (attribute, height, style, width)
+
 
 
 ---- MODEL ----
 
 
+type Actor
+    = Player
+    | Enemy
+    | Platform
+    | Particle
+
+
+type alias CanvasItem =
+    { actor : Actor
+    , position : ( Float, Float )
+    }
+
+
 type alias Model =
-    {}
+    { canvasItems : List CanvasItem }
 
 
 init : ( Model, Cmd Msg )
 init =
-    ( {}, Cmd.none )
+    ( { canvasItems =
+            [ { actor = Player
+              , position = ( 10, 10 )
+              }
+            , { actor = Enemy
+              , position = ( 100, 10 )
+              }
+            , { actor = Platform
+              , position = ( 50, 50 )
+              }
+            ]
+      }
+    , Cmd.none
+    )
 
 
 
@@ -34,12 +64,41 @@ update msg model =
 ---- VIEW ----
 
 
-view : Model -> Html Msg
+view : Model -> Html msg
 view model =
-    div []
-        [ img [ src "/logo.svg" ] []
-        , h1 [] [ text "Your Elm App is working!" ]
-        ]
+    let
+        ( w, h ) =
+            ( 500, 300 )
+    in
+    model.canvasItems
+        |> List.map renderCanvasItem
+        |> Canvas.toHtml ( w, h )
+            [ style "border" "1px solid black"
+            , style "background-color" "lightblue"
+            , style "display" "inline-block"
+            , style "width" (String.fromInt w ++ "px")
+            , style "height" (String.fromInt h ++ "px")
+            ]
+
+
+renderCanvasItem : CanvasItem -> Renderable
+renderCanvasItem { actor, position } =
+    let
+        color =
+            case actor of
+                Player ->
+                    Color.blue
+
+                Enemy ->
+                    Color.red
+
+                Platform ->
+                    Color.brown
+
+                Particle ->
+                    Color.orange
+    in
+    shapes [ fill color ] [ rect position 50 50 ]
 
 
 
