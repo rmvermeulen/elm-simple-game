@@ -6,7 +6,9 @@ import Canvas exposing (..)
 import Canvas.Settings exposing (..)
 import Color
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, height, style, width)
+import Html.Attributes exposing (style)
+import Keyboard exposing (Key(..))
+import Keyboard.Arrows exposing (Direction(..), arrowsDirection, wasdDirection)
 import Time exposing (Posix)
 
 
@@ -35,6 +37,7 @@ type alias CanvasItem =
 type alias Model =
     { canvasItems : List CanvasItem
     , mLastFrameTime : Maybe Time.Posix
+    , pressedKeys : List Key
     }
 
 
@@ -43,7 +46,7 @@ init =
     ( { canvasItems =
             [ { actor = Player 10
               , position = ( 10, 10 )
-              , velocity = ( 1, 0 )
+              , velocity = ( 0, 0 )
               }
             , { actor = Enemy 10
               , position = ( 100, 10 )
@@ -55,9 +58,61 @@ init =
               }
             ]
       , mLastFrameTime = Nothing
+      , pressedKeys = []
       }
     , Cmd.none
     )
+
+
+isShooting : Model -> Bool
+isShooting model =
+    List.member Spacebar model.pressedKeys
+
+
+directionToJoystick : Direction -> ( Float, Float )
+directionToJoystick direction =
+    let
+        v =
+            sqrt 2
+    in
+    case direction of
+        North ->
+            ( 0, -1 )
+
+        NorthEast ->
+            ( v, -v )
+
+        East ->
+            ( 1, 0 )
+
+        SouthEast ->
+            ( v, v )
+
+        South ->
+            ( 0, 1 )
+
+        SouthWest ->
+            ( -v, v )
+
+        West ->
+            ( -1, 0 )
+
+        NorthWest ->
+            ( -v, -v )
+
+        NoDirection ->
+            ( 0, 0 )
+
+
+getJoystick : Model -> ( Float, Float )
+getJoystick { pressedKeys } =
+    directionToJoystick <|
+        case arrowsDirection pressedKeys of
+            NoDirection ->
+                wasdDirection pressedKeys
+
+            d ->
+                d
 
 
 
@@ -65,7 +120,7 @@ init =
 
 
 type Msg
-    = NoOp
+    = KeyMsg Keyboard.Msg
     | Tick Time.Posix
 
 
@@ -78,22 +133,34 @@ update msg model =
     case msg of
         Tick time ->
             let
-                ms =
+                delta : Float
+                delta =
                     model.mLastFrameTime
                         |> Maybe.map (Time.posixToMillis >> (-) (Time.posixToMillis time))
                         |> Maybe.withDefault 0
+                        |> (\n ->
+                                if n == 0 then
+                                    0.0
+
+                                else
+                                    1.0 / toFloat n
+                           )
 
                 updateItems =
-                    List.map (updateCanvasItem ms)
+                    let
+                        joystick =
+                            getJoystick model
+                    in
+                    List.map (updateCanvasItem delta joystick)
             in
             simply
                 { model
                     | mLastFrameTime = Just time
-                    , canvasItems = model.canvasItems |> updateItems
+                    , canvasItems = updateItems model.canvasItems
                 }
 
-        _ ->
-            simply model
+        KeyMsg kMsg ->
+            simply { model | pressedKeys = Keyboard.update kMsg model.pressedKeys }
 
 
 tupleOp : (value -> value -> value) -> ( value, value ) -> ( value, value ) -> ( value, value )
@@ -111,13 +178,26 @@ tMultiply =
     tupleOp (*)
 
 
-updateCanvasItem : Int -> CanvasItem -> CanvasItem
-updateCanvasItem ms { actor, position, velocity } =
+tOp fn =
+    Tuple.mapBoth fn fn
+
+
+updateCanvasItem : Float -> ( Float, Float ) -> CanvasItem -> CanvasItem
+updateCanvasItem delta joystick { actor, position, velocity } =
     let
-        newPosition =
-            tAdd position velocity
+        scale =
+            tOp <| (*) delta
     in
-    CanvasItem actor newPosition velocity
+    { actor = actor
+    , position = tAdd position (scale velocity)
+    , velocity =
+        case actor of
+            Player _ ->
+                tAdd velocity (scale joystick)
+
+            _ ->
+                velocity
+    }
 
 
 
@@ -163,6 +243,18 @@ renderCanvasItem { actor, position } =
 
 
 
+---- SUBSCRIPTIONS ----
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Sub.batch
+        [ onAnimationFrame Tick
+        , Sub.map KeyMsg Keyboard.subscriptions
+        ]
+
+
+
 ---- PROGRAM ----
 
 
@@ -172,5 +264,5 @@ main =
         { view = view
         , init = \_ -> init
         , update = update
-        , subscriptions = \_ -> onAnimationFrame Tick
+        , subscriptions = subscriptions
         }
