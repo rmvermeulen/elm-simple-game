@@ -5,10 +5,12 @@ import Browser.Events exposing (onAnimationFrame)
 import Canvas exposing (..)
 import Canvas.Settings exposing (..)
 import Color
+import Dict exposing (Dict)
 import Html exposing (Html)
 import Html.Attributes exposing (style)
 import Keyboard exposing (Key(..))
 import Keyboard.Arrows exposing (Direction(..), arrowsDirection, wasdDirection)
+import Set exposing (Set)
 import Time exposing (Posix)
 
 
@@ -20,46 +22,127 @@ type alias HitPoints =
     Int
 
 
-type Actor
+type alias Components data =
+    Dict Int data
+
+
+type Class
     = Player HitPoints
     | Enemy HitPoints
     | Platform Float Float
     | Particle
 
 
-type alias CanvasItem =
-    { actor : Actor
-    , position : ( Float, Float )
-    , velocity : ( Float, Float )
+type Shape
+    = Rect Float Float
+    | Circle Float
+
+
+type alias Transform =
+    { position : Point
+    , velocity : Point
+    , rotation : Float
     }
+
+
+setPosition : Point -> Transform -> Transform
+setPosition v t =
+    { t | position = v }
+
+
+setVelocity : Point -> Transform -> Transform
+setVelocity v t =
+    { t | velocity = v }
+
+
+setRotation : Float -> Transform -> Transform
+setRotation v t =
+    { t | rotation = v }
 
 
 type alias Model =
-    { canvasItems : List CanvasItem
-    , mLastFrameTime : Maybe Time.Posix
+    { mLastFrameTime : Maybe Time.Posix
     , pressedKeys : List Key
+    , entities : Set Int
+    , classes : Components Class
+    , shapes : Components Shape
+    , transforms : Components Transform
     }
+
+
+setMLastFrameTime : Maybe Time.Posix -> Model -> Model
+setMLastFrameTime v m =
+    { m | mLastFrameTime = v }
+
+
+setPressedKeys : List Key -> Model -> Model
+setPressedKeys v m =
+    { m | pressedKeys = v }
+
+
+setEntities : Set Int -> Model -> Model
+setEntities v m =
+    { m | entities = v }
+
+
+setClasses : Components Class -> Model -> Model
+setClasses v m =
+    { m | classes = v }
+
+
+setShapes : Components Shape -> Model -> Model
+setShapes v m =
+    { m | shapes = v }
+
+
+setTransforms : Components Transform -> Model -> Model
+setTransforms v m =
+    { m | transforms = v }
+
+
+empty : Model
+empty =
+    Model Nothing [] Set.empty Dict.empty Dict.empty Dict.empty
 
 
 init : ( Model, Cmd Msg )
 init =
-    ( { canvasItems =
-            [ { actor = Player 10
-              , position = ( 10, 10 )
-              , velocity = ( 0, 0 )
-              }
-            , { actor = Enemy 10
-              , position = ( 100, 10 )
-              , velocity = ( 0, 0 )
-              }
-            , { actor = Platform 100 20
-              , position = ( 50, 50 )
-              , velocity = ( 0, 0 )
-              }
-            ]
-      , mLastFrameTime = Nothing
-      , pressedKeys = []
-      }
+    let
+        entities =
+            Set.fromList <| List.range 0 5
+
+        createComponents fn =
+            entities
+                |> Set.toList
+                |> List.map (\id -> ( id, fn id ))
+                |> Dict.fromList
+
+        shapes =
+            createComponents (\id -> Rect 50 50)
+
+        classes =
+            createComponents
+                (\id ->
+                    case id of
+                        0 ->
+                            Player 3
+
+                        1 ->
+                            Enemy 1
+
+                        _ ->
+                            Platform 50 20
+                )
+
+        transforms =
+            createComponents
+                (\id -> Transform ( toFloat id * 20, 20 ) ( 10, 10 ) 0)
+    in
+    ( empty
+        |> setEntities entities
+        |> setShapes shapes
+        |> setClasses classes
+        |> setTransforms transforms
     , Cmd.none
     )
 
@@ -145,59 +228,54 @@ update msg model =
                                 else
                                     1.0 / toFloat n
                            )
-
-                updateItems =
-                    let
-                        joystick =
-                            getJoystick model
-                    in
-                    List.map (updateCanvasItem delta joystick)
             in
-            simply
-                { model
-                    | mLastFrameTime = Just time
-                    , canvasItems = updateItems model.canvasItems
-                }
+            model
+                |> setMLastFrameTime (Just time)
+                |> setTransforms
+                    (updateComponents
+                        (updateTransform delta)
+                        model.entities
+                        model.transforms
+                    )
+                |> simply
 
         KeyMsg kMsg ->
             simply { model | pressedKeys = Keyboard.update kMsg model.pressedKeys }
 
 
-tupleOp : (value -> value -> value) -> ( value, value ) -> ( value, value ) -> ( value, value )
-tupleOp op ( a1, a2 ) ( b1, b2 ) =
+updateTransform : Float -> Transform -> Transform
+updateTransform delta t =
+    let
+        position =
+            let
+                step =
+                    t.velocity |> onBoth ((*) delta)
+            in
+            t.position |> combine (+) step
+    in
+    t |> setPosition position
+
+
+combine : (value -> value -> value) -> ( value, value ) -> ( value, value ) -> ( value, value )
+combine op ( a1, a2 ) ( b1, b2 ) =
     ( op a1 b1, op a2 b2 )
 
 
-tAdd : ( Float, Float ) -> ( Float, Float ) -> ( Float, Float )
-tAdd =
-    tupleOp (+)
-
-
-tMultiply : ( Float, Float ) -> ( Float, Float ) -> ( Float, Float )
-tMultiply =
-    tupleOp (*)
-
-
-tOp fn =
+onBoth fn =
     Tuple.mapBoth fn fn
 
 
-updateCanvasItem : Float -> ( Float, Float ) -> CanvasItem -> CanvasItem
-updateCanvasItem delta joystick { actor, position, velocity } =
-    let
-        scale =
-            tOp <| (*) delta
-    in
-    { actor = actor
-    , position = tAdd position (scale velocity)
-    , velocity =
-        case actor of
-            Player _ ->
-                tAdd velocity (scale joystick)
-
-            _ ->
-                velocity
-    }
+updateComponents : (c -> c) -> Set Int -> Dict Int c -> Dict Int c
+updateComponents fn entities components =
+    entities
+        |> Set.toList
+        |> List.filterMap
+            (\id ->
+                Dict.get id components
+                    |> Maybe.map (Tuple.pair id)
+            )
+        |> Dict.fromList
+        |> Dict.map (\_ -> fn)
 
 
 
@@ -210,8 +288,7 @@ view model =
         ( w, h ) =
             ( 500, 300 )
     in
-    model.canvasItems
-        |> List.map renderCanvasItem
+    renderEntities model
         |> (++) [ clear ( 0, 0 ) w h ]
         |> Canvas.toHtml ( w, h )
             [ style "border" "1px solid black"
@@ -222,13 +299,30 @@ view model =
             ]
 
 
-renderCanvasItem : CanvasItem -> Renderable
-renderCanvasItem { actor, position } =
+renderEntities : Model -> List Renderable
+renderEntities { entities, classes, transforms } =
+    let
+        getClass id =
+            Dict.get id classes
+
+        getTransform id =
+            Dict.get id transforms
+
+        tryRender =
+            \id -> Maybe.map2 renderEntity (getClass id) (getTransform id)
+    in
+    entities
+        |> Set.toList
+        |> List.filterMap tryRender
+
+
+renderEntity : Class -> Transform -> Renderable
+renderEntity class { position } =
     let
         ( w, h ) =
             ( 20, 20 )
     in
-    case actor of
+    case class of
         Player _ ->
             shapes [ fill Color.blue ] [ rect position w h ]
 
